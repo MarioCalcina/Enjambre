@@ -108,12 +108,23 @@ jobs:
           flutter-version-file: app/pubspec.yaml
       - run: flutter build windows
       - name: Build msix
-        run: dart run msix:create --store --build-windows=false
+        # The msix is only for the Microsoft Store, which requires the Store
+        # identity: skipped until it is filled in the msix_config section of
+        # pubspec.yaml.
+        run: |
+          if (Select-String -Path pubspec.yaml -Pattern '^\s+identity_name:' -Quiet) {
+            dart run msix:create --store --build-windows=false
+          } else {
+            Write-Output "No Microsoft Store identity in pubspec.yaml, msix skipped"
+          }
       - name: Prepare artifacts
         run: |
           mkdir ${{ github.workspace }}/artifacts
+          # Moved out first so that it is not also packed in release.zip
+          if (Test-Path build/windows/x64/runner/Release/*.msix) {
+            mv build/windows/x64/runner/Release/*.msix ${{ github.workspace }}/artifacts/
+          }
           7z a ${{ github.workspace }}/artifacts/release.zip ./build/windows/x64/runner/Release/*
-          mv build/windows/x64/runner/Release/*.msix ${{ github.workspace }}/artifacts/
       - uses: actions/upload-artifact@v4
         with:
           name: enjambre-windows

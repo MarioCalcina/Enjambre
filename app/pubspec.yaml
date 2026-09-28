@@ -137,7 +137,7 @@ flutter:
 msix_config:
   display_name: Enjambre
   # Fill these in with your own Microsoft Partner Center identity before
-  # building an msix package.
+  # building an msix package. CI skips the msix until identity_name is set.
   # publisher_display_name:
   # identity_name:
   # publisher:

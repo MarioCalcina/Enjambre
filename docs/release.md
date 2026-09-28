@@ -28,6 +28,9 @@ screenshots).
 
 1. Check the published release binaries.
 1. Submit the `.msix` from the `enjambre-windows` artifact to the Microsoft Store.
+   CI only builds it once the Store identity (`identity_name`, `publisher` and
+   `publisher_display_name`) is filled in the `msix_config` section of
+   `app/pubspec.yaml`.
 
 ## Store listing
 
