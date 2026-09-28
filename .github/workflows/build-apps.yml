@@ -6,6 +6,8 @@ on:
       - 'app/**'
       - '.github/workflows/build-apps.yml'
     tags: ['*']
+  # "Run workflow" button in the Actions tab
+  workflow_dispatch:
 jobs:
   checks:
     runs-on: ubuntu-24.04

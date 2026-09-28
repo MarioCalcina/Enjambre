@@ -18,6 +18,8 @@ changelog as its body.
 Linux and Windows always build. macOS, iOS and Android need signing secrets, so their
 jobs are skipped until the `BUILD_MACOS`, `BUILD_IOS` and `BUILD_ANDROID` repository
 variables are set to `true` (Settings → Secrets and variables → Actions → Variables).
+A change takes effect on the next push, or right away with "Run workflow" in the
+Actions tab.
 
 When the `GCP_WORKLOAD_IDENTITY_PROVIDER` and `GCP_SERVICE_ACCOUNT` repository
 variables are set, CI also uploads the bundle to the Play Store production track along
