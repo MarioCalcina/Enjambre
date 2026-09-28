@@ -1,0 +1,100 @@
+plugins {
+    id "com.android.application"
+    id "kotlin-android"
+    // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
+    id "dev.flutter.flutter-gradle-plugin"
+}
+
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file('key.properties')
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
+android {
+    namespace = "com.enjambre.Enjambre"
+    compileSdk = flutter.compileSdkVersion
+    ndkVersion = "29.0.14206865"
+
+    compileOptions {
+        coreLibraryDesugaringEnabled true
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
+    }
+
+    kotlinOptions {
+        jvmTarget = JavaVersion.VERSION_11
+    }
+
+    defaultConfig {
+        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
+        applicationId = "com.enjambre.Enjambre"
+        // You can update the following values to match your application needs.
+        // For more information, see: https://flutter.dev/to/review-gradle-config.
+        minSdk = 26
+        targetSdk = flutter.targetSdkVersion
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
+    }
+
+    signingConfigs {
+        release {
+            keyAlias = keystoreProperties['keyAlias']
+            keyPassword = keystoreProperties['keyPassword']
+            storeFile = keystoreProperties['storeFile'] ? file(keystoreProperties['storeFile']) : null
+            storePassword = keystoreProperties['storePassword']
+        }
+    }
+
+    buildTypes {
+        release {
+            // Without key.properties, i.e. a local build, fall back to the
+            // debug key so that a release APK can still be built and
+            // installed. CI always writes key.properties.
+            signingConfig = keystorePropertiesFile.exists()
+                    ? signingConfigs.release
+                    : signingConfigs.debug
+        }
+
+        debug {
+            applicationIdSuffix ".debug"
+            debuggable true
+        }
+    }
+
+    // media_kit ships a prebuilt libmpv for every ABI inside its AAR, and the
+    // Flutter plugin re-adds every default platform to each build type, so an
+    // arm64 build still packaged the armeabi-v7a and x86_64 copies: ~27 MB of
+    // libraries the device cannot load. Narrow the filters down to what the
+    // build actually asked for.
+    //
+    // This has to sit on the build types, and after the Flutter plugin has
+    // been applied: a filter in defaultConfig is merged with theirs instead of
+    // replacing it. Without --target-platform nothing is touched and the apk
+    // stays universal.
+    if (project.hasProperty("target-platform")) {
+        def abiPerPlatform = [
+            "android-arm"  : "armeabi-v7a",
+            "android-arm64": "arm64-v8a",
+            "android-x64"  : "x86_64",
+            "android-x86"  : "x86",
+        ]
+        def requestedAbis = project.property("target-platform").split(",")
+                .collect { abiPerPlatform[it] }.findAll { it != null }
+
+        if (!requestedAbis.isEmpty()) {
+            buildTypes.each { buildType ->
+                buildType.ndk.abiFilters.clear()
+                buildType.ndk.abiFilters.addAll(requestedAbis)
+            }
+        }
+    }
+}
+
+dependencies {
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
+}
+
+flutter {
+    source = "../.."
+}

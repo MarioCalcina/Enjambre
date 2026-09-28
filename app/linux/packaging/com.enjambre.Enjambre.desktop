@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Enjambre
+GenericName=BitTorrent Client
+Exec=enjambre %u
+Icon=com.enjambre.Enjambre
+Type=Application
+StartupNotify=true
+MimeType=x-scheme-handler/magnet;application/x-bittorrent;
+Categories=Network;FileTransfer
+Keywords=torrent;bittorrent

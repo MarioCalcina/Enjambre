@@ -1,0 +1,385 @@
+name: Build apps
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'app/**'
+      - '.github/workflows/build-apps.yml'
+    tags: ['*']
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: ./app
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@v4
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version-file: app/pubspec.yaml
+      - run: flutter pub get
+      # The localizations are generated, not committed
+      - run: flutter gen-l10n
+      - run: flutter analyze
+      - run: flutter test
+
+  linux:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: ./app
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@v4
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version-file: app/pubspec.yaml
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y ninja-build libgtk-3-dev libcurl4-openssl-dev libmpv-dev mpv libayatana-appindicator3-dev
+      - run: flutter build linux
+      - name: Prepare artifacts
+        run: |
+          mkdir ~/artifacts
+          7z a ~/artifacts/release.zip ./build/linux/x64/release/bundle/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: enjambre-linux
+          path: ~/artifacts/
+
+  linux-arm64:
+    runs-on: ubuntu-24.04-arm
+    defaults:
+      run:
+        working-directory: ./app
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@v4
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: master # channel stable does not support arm64 for now
+          flutter-version-file: app/pubspec.yaml
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y ninja-build libgtk-3-dev libcurl4-openssl-dev libmpv-dev mpv libayatana-appindicator3-dev
+      - run: flutter build linux
+      - name: Prepare artifacts
+        run: |
+          mkdir ~/artifacts
+          7z a ~/artifacts/release.zip ./build/linux/arm64/release/bundle/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: enjambre-linux-arm64
+          path: ~/artifacts/
+
+  windows:
+    runs-on: windows-2022
+    env:
+      # Workaround for https://gitlab.kitware.com/cmake/cmake/-/issues/25936
+      TRANSMISSION_PREFIX: ${{ github.workspace }}/transmission-prefix
+      VCPKG_MANIFEST_DIR: ${{ github.workspace }}/app
+    defaults:
+      run:
+        working-directory: ./app
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Set up vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgDirectory: ${{ github.workspace }}/app/vcpkg
+      - name: Set up Flutter
+        # yq is not installed on windows on v2
+        uses: subosito/flutter-action@v2.18.0
+        with:
+          channel: stable
+          flutter-version-file: app/pubspec.yaml
+      - run: flutter build windows
+      - name: Build msix
+        run: dart run msix:create --store --build-windows=false
+      - name: Prepare artifacts
+        run: |
+          mkdir ${{ github.workspace }}/artifacts
+          7z a ${{ github.workspace }}/artifacts/release.zip ./build/windows/x64/runner/Release/*
+          mv build/windows/x64/runner/Release/*.msix ${{ github.workspace }}/artifacts/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: enjambre-windows
+          path: ${{ github.workspace }}/artifacts
+
+  macos:
+    runs-on: macos-15
+    env:
+      # Should be same as defined in /app/macos/Runner.xcodeproj
+      MACOSX_DEPLOYMENT_TARGET: 10.14
+    defaults:
+      run:
+        working-directory: ./app
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: install dependencies
+        run: brew install create-dmg
+
+      - name: Install Apple Certificate
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_DEVELOPER_ID_APPLICATION_P12 }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+      - name: Install the provisioning profile
+        run: |
+          mkdir -p ~/Library/Developer/Xcode/Provisioning\ Profiles
+          echo "${{ secrets.APPLE_MACOS_PROVISION_PROFILE }}" | base64 --decode > ~/Library/Developer/Xcode/Provisioning\ Profiles/enjambre.provisionprofile
+
+      - name: Set up vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgDirectory: ${{ github.workspace }}/app/vcpkg
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version-file: app/pubspec.yaml
+
+      - name: Build
+        run: flutter build macos
+
+      - name: Sign
+        run: ./scripts/macos/sign.sh "${{ secrets.APPLE_DEVELOPER_ID_APPLICATION }}"
+
+      - name: Notarize & Staple
+        run: |
+          echo "${{ secrets.APPLE_KEY_P8 }}" | base64 --decode > ~/apple-key.p8
+          ./scripts/macos/notarize.sh --key-id ${{ secrets.APPLE_KEY_ID }} --key ~/apple-key.p8 --issuer ${{ secrets.APPLE_KEY_ISSUER }}
+
+      - name: Create .dmg
+        run: |
+          cd build/macos/Build/Products/Release/
+          create-dmg \
+            --volname "Application Installer" \
+            --window-pos 200 120 \
+            --window-size 800 400 \
+            --icon-size 100 \
+            --icon "Enjambre.app" 200 190 \
+            --hide-extension "Enjambre.app" \
+            --app-drop-link 600 185 \
+            Enjambre.dmg ./Enjambre.app
+
+      - name: Prepare artifacts
+        run: |
+          mkdir ~/artifacts
+          mv build/macos/Build/Products/Release/*.dmg ~/artifacts/
+          mv build/macos/Build/Products/Release/release.app.zip ~/artifacts/release.app.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: enjambre-macos
+          path: ~/artifacts/
+
+  android:
+    runs-on: ubuntu-24.04
+    env:
+      VCPKG_MANIFEST_DIR: ${{ github.workspace }}/app
+      SOURCE_DATE_EPOCH: 0
+    defaults:
+      run:
+        working-directory: ./app
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Free Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+
+      - name: Decode android-keystore.jks
+        env:
+          ENCODED_STRING: ${{ secrets.ANDROID_KEY_STORE }}
+        run: echo $ENCODED_STRING | base64 -di > android/android-keystore.jks
+
+      - name: Decode key.properties
+        env:
+          ENCODED_STRING: ${{ secrets.ANDROID_KEY_PROPERTIES }}
+        run: echo $ENCODED_STRING | base64 -di > android/key.properties
+
+      - name: Set up vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgDirectory: ${{ github.workspace }}/app/vcpkg
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version-file: app/pubspec.yaml
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y ninja-build
+
+      - run: flutter build apk
+      - run: flutter build appbundle
+
+      - name: Prepare artifacts
+        run: |
+          mkdir ~/artifacts
+          cp ./build/app/outputs/flutter-apk/*.apk ~/artifacts/
+          cp ./build/app/outputs/bundle/release/*.aab ~/artifacts/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: enjambre-android
+          path: ~/artifacts/
+
+  ios:
+    runs-on: macos-15
+    env:
+      # Do not target simulator
+      TARGET_IOS_DEVICE: true
+      IPHONEOS_DEPLOYMENT_TARGET: 12 # Should be same as defined in /app/ios/Runner.
+    defaults:
+      run:
+        working-directory: ./app
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install Apple Certificate
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_DISTRIBUTION_P12 }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+      - name: Install the provisioning profile
+        run: |
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          echo "${{ secrets.APPLE_IOS_PROVISION_PROFILE }}" | base64 --decode > ~/Library/MobileDevice/Provisioning\ Profiles/enjambre.mobileprovision
+
+      - name: Set up vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgDirectory: ${{ github.workspace }}/app/vcpkg
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version-file: app/pubspec.yaml
+      - run: flutter build ipa --export-options-plist="ios/ExportOptions.plist"
+      - name: Prepare artifacts
+        run: |
+          mkdir ~/artifacts
+          mv build/ios/ipa/*.ipa ~/artifacts/enjambre.ipa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: enjambre-ios
+          path: ~/artifacts/
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    needs: [checks, linux, linux-arm64, windows, macos, android, ios]
+    steps:
+      # Needed to read the changelog used as the release body
+      - name: Clone repository
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Desktop
+        run: |
+          mv enjambre-linux/release.zip Enjambre-${{ github.ref_name }}-linux-x64.zip
+          mv enjambre-linux-arm64/release.zip Enjambre-${{ github.ref_name }}-linux-arm64.zip
+          mv enjambre-windows/release.zip Enjambre-${{ github.ref_name }}-windows-x64.zip
+          mv enjambre-macos/release.app.zip ${{ github.workspace }}/Enjambre-${{ github.ref_name }}-macos.app.zip
+          mv enjambre-macos/*.dmg ${{ github.workspace }}/Enjambre-${{ github.ref_name }}-macos.dmg
+      - name: Mobile
+        run: |
+          mv enjambre-android/*.apk Enjambre-${{ github.ref_name }}-android.apk
+          mv enjambre-ios/*.ipa Enjambre-${{ github.ref_name }}-ios.ipa
+
+      # Reuse the Play Store changelog, which supply keys by versionCode
+      - name: Resolve release notes
+        run: |
+          VERSION_CODE=$(sed -n 's/^version: .*+//p' app/pubspec.yaml)
+          echo "CHANGELOG=app/android/fastlane/metadata/android/en-US/changelogs/${VERSION_CODE}.txt" >> "$GITHUB_ENV"
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Enjambre-*
+          body_path: ${{ env.CHANGELOG }}
+
+  play-store:
+    # Only publish real releases, never beta tags. Skipped until the Google
+    # Cloud repository variables below are configured.
+    if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, 'beta') && vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
+    runs-on: ubuntu-24.04
+    needs: [android]
+    permissions:
+      contents: read
+      # Required to mint the OIDC token for Workload Identity Federation
+      id-token: write
+    defaults:
+      run:
+        working-directory: ./app/android
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: enjambre-android
+          path: ~/artifacts
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          # Repository variables, e.g.
+          # projects/<number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          # Direct Workload Identity Federation cannot be used here: the Play
+          # Developer API needs an OAuth 2.0 access token, which requires a
+          # service account, and access is granted in the Play Console to this
+          # account's email rather than to a federated principal.
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+          working-directory: ./app/android
+
+      # Release notes are committed at
+      # fastlane/metadata/android/en-US/changelogs/<versionCode>.txt
+      # and picked up by supply automatically.
+      - name: Locate app bundle
+        run: echo "SUPPLY_AAB=$(ls ~/artifacts/*.aab)" >> "$GITHUB_ENV"
+
+      - name: Upload to Play Store
+        env:
+          SUPPLY_JSON_KEY: ${{ steps.auth.outputs.credentials_file_path }}
+        run: bundle exec fastlane deploy

@@ -1,0 +1,419 @@
+import 'dart:convert';
+import 'dart:io';
+import 'dart:isolate';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter_libtransmission/flutter_libtransmission.dart'
+    as flutter_libtransmission;
+import 'package:path_provider/path_provider.dart';
+import 'package:enjambre/engine/file.dart' as torrent_file;
+import 'package:enjambre/engine/engine.dart';
+import 'package:enjambre/engine/session.dart';
+import 'package:enjambre/engine/torrent.dart';
+import 'package:enjambre/engine/transmission/models/session_get_request.dart';
+import 'package:enjambre/engine/transmission/models/session_get_response.dart';
+import 'package:enjambre/engine/transmission/models/session_set_request.dart';
+import 'package:enjambre/engine/transmission/models/torrent.dart';
+import 'package:enjambre/engine/transmission/models/torrent_action_request.dart';
+import 'package:enjambre/engine/transmission/models/torrent_add_request.dart';
+import 'package:enjambre/engine/transmission/models/torrent_add_response.dart';
+import 'package:enjambre/engine/transmission/models/torrent_get_request.dart';
+import 'package:enjambre/engine/transmission/models/torrent_get_response.dart';
+import 'package:enjambre/engine/transmission/models/torrent_remove_request.dart';
+import 'package:path/path.dart' as path;
+import 'package:enjambre/engine/transmission/models/torrent_set_location.dart';
+import 'package:enjambre/engine/transmission/models/torrent_set_request.dart';
+import 'package:enjambre/platforms/android/default_session.dart' as android;
+import 'package:enjambre/platforms/ios/default_session.dart' as ios;
+
+Future<Directory> getConfigDir() async {
+  final configDir =
+      path.join((await getApplicationSupportDirectory()).path, 'transmission');
+  return Directory(configDir);
+}
+
+/// Fields fetched for the torrents list, refreshed every few seconds.
+///
+/// The piece bitfield is deliberately left out: it is only needed while
+/// streaming, and decoding one for every torrent on every refresh costs more
+/// than the whole rest of the refresh.
+const torrentListFields = [
+  TorrentField.id,
+  TorrentField.name,
+  TorrentField.percentDone,
+  TorrentField.status,
+  TorrentField.totalSize,
+  TorrentField.rateDownload,
+  TorrentField.rateUpload,
+  TorrentField.labels,
+  TorrentField.addedDate,
+  TorrentField.error,
+  TorrentField.errorString,
+  TorrentField.isPrivate,
+  TorrentField.downloadDir,
+  TorrentField.files,
+  TorrentField.fileStats,
+  TorrentField.downloadedEver,
+  TorrentField.uploadedEver,
+  TorrentField.eta,
+  TorrentField.pieceSize,
+  TorrentField.pieceCount,
+  TorrentField.comment,
+  TorrentField.creator,
+  TorrentField.peersConnected,
+  TorrentField.magnetLink,
+  TorrentField.sequentialDownload,
+  TorrentField.doneDate
+];
+
+/// Fields fetched for a single torrent, with the piece bitfield the streaming
+/// server needs to know which pieces are already available.
+const torrentGetFields = [...torrentListFields, TorrentField.pieces];
+
+TransmissionTorrent createTransmissionTorrentFromJson(
+    TransmissionTorrentModel torrent) {
+  return TransmissionTorrent(
+      id: torrent.id,
+      name: torrent.name,
+      progress: torrent.percentDone,
+      status: torrent.status,
+      size: torrent.totalSize,
+      rateDownload: torrent.rateDownload,
+      rateUpload: torrent.rateUpload,
+      labels: torrent.labels,
+      addedDate: torrent.addedDate,
+      errorString: torrent.errorString,
+      errorType: switch (torrent.error) {
+        1 => TorrentErrorType.trackerWarning,
+        2 => TorrentErrorType.trackerError,
+        3 => TorrentErrorType.localError,
+        _ => TorrentErrorType.none,
+      },
+      magnetLink: torrent.magnetLink,
+      isPrivate: torrent.isPrivate,
+      location: torrent.location,
+      files: torrent.files
+          .asMap()
+          .entries
+          .map((entry) => torrent_file.File(
+              name: entry.value.name,
+              length: entry.value.length,
+              bytesCompleted: entry.value.bytesCompleted,
+              wanted: torrent.fileStats[entry.key].wanted,
+              beginPiece: entry.value.beginPiece,
+              endPiece: entry.value.endPiece))
+          .toList(),
+      downloadedEver: torrent.downloadedEver,
+      uploadedEver: torrent.uploadedEver,
+      eta: torrent.eta,
+      pieces: torrent.pieces,
+      pieceCount: torrent.pieceCount,
+      pieceSize: torrent.pieceSize,
+      comment: torrent.comment,
+      creator: torrent.creator,
+      peersConnected: torrent.peersConnected,
+      sequentialDownload: torrent.sequentialDownload,
+      doneDate: torrent.doneDate);
+}
+
+class TransmissionTorrent extends Torrent {
+  TransmissionTorrent(
+      {required super.id,
+      required super.name,
+      required super.progress,
+      required super.status,
+      required super.size,
+      required super.rateDownload,
+      required super.rateUpload,
+      required super.downloadedEver,
+      required super.uploadedEver,
+      required super.eta,
+      required super.pieces,
+      required super.pieceCount,
+      required super.pieceSize,
+      required super.errorString,
+      required super.errorType,
+      required super.addedDate,
+      required super.isPrivate,
+      required super.location,
+      required super.creator,
+      required super.comment,
+      required super.files,
+      required super.labels,
+      required super.peersConnected,
+      required super.magnetLink,
+      required super.sequentialDownload,
+      required super.doneDate});
+
+  @override
+  Future<void> start() async {
+    var request = TorrentActionRequest(
+        action: TorrentAction.start,
+        arguments: TorrentActionRequestArguments(ids: [id]));
+    await flutter_libtransmission.requestAsync(jsonEncode(request));
+  }
+
+  @override
+  Future<void> stop() async {
+    var request = TorrentActionRequest(
+        action: TorrentAction.stop,
+        arguments: TorrentActionRequestArguments(ids: [id]));
+    await flutter_libtransmission.requestAsync(jsonEncode(request));
+  }
+
+  @override
+  Future<void> remove(bool withData) async {
+    var request = TorrentRemoveRequest(
+        arguments: TorrentRemoveRequestArguments(
+            ids: [id], deleteLocalData: withData));
+    await flutter_libtransmission.requestAsync(jsonEncode(request));
+  }
+
+  @override
+  Future update(TorrentBase torrent) async {
+    var request = TorrentSetRequest(
+        arguments:
+            TorrentSetRequestArguments(ids: [id], labels: torrent.labels));
+    await flutter_libtransmission.requestAsync(jsonEncode(request));
+  }
+
+  @override
+  Future toggleFileWanted(int fileIndex, bool wanted) async {
+    var request = TorrentSetRequest(
+        arguments: TorrentSetRequestArguments(
+            ids: [id],
+            filesWanted: wanted ? [fileIndex] : null,
+            filesUnwanted: !wanted ? [fileIndex] : null));
+    await flutter_libtransmission.requestAsync(jsonEncode(request));
+  }
+
+  @override
+  Future toggleAllFilesWanted(bool wanted) async {
+    final filesIndexesNotCompleted = files.indexed
+        .where((indexedElement) =>
+            indexedElement.$2.bytesCompleted != indexedElement.$2.length)
+        .map((indexedElement) => indexedElement.$1)
+        .toList();
+
+    final request = TorrentSetRequest(
+        arguments: wanted
+            ? TorrentSetRequestArguments(
+                ids: [id], filesWanted: filesIndexesNotCompleted)
+            : TorrentSetRequestArguments(
+                ids: [id], filesUnwanted: filesIndexesNotCompleted));
+    await flutter_libtransmission.requestAsync(jsonEncode(request));
+  }
+
+  @override
+  Future setSequentialDownload(bool sequential) async {
+    var request = TorrentSetRequest(
+        arguments: TorrentSetRequestArguments(
+            ids: [id], sequentialDownload: sequential)); // FIXME
+
+    await flutter_libtransmission.requestAsync(jsonEncode(request));
+  }
+
+  @override
+  Future setSequentialDownloadFromPiece(int piece) async {
+    debugPrint('setSequentialDownloadFromPiece $piece');
+    var request = TorrentSetRequest(
+        arguments: TorrentSetRequestArguments(
+            ids: [id], sequentialDownloadFromPiece: piece));
+
+    await flutter_libtransmission.requestAsync(jsonEncode(request));
+  }
+
+  @override
+  Future<void> resetStreamingState() async {
+    final fileIndices = List.generate(files.length, (index) => index);
+
+    // Sequential download and priorities are reset in a single request, so a
+    // torrent cannot be left half way through.
+    //
+    // sequential_download_from_piece is not sent: it is only read while
+    // sequential download is on, and transmission rejects it on a magnet whose
+    // metadata is not downloaded yet.
+    var request = TorrentSetRequest(
+        arguments: TorrentSetRequestArguments(
+            ids: [id],
+            sequentialDownload: false,
+            priorityNormal: fileIndices.isEmpty ? null : fileIndices));
+
+    await flutter_libtransmission.requestAsync(jsonEncode(request));
+  }
+
+  @override
+  Future setFilesPriority(
+      {List<int>? priorityHigh,
+      List<int>? priorityLow,
+      List<int>? priorityNormal}) async {
+    var request = TorrentSetRequest(
+        arguments: TorrentSetRequestArguments(
+            ids: [id],
+            priorityHigh: priorityHigh,
+            priorityLow: priorityLow,
+            priorityNormal: priorityNormal));
+
+    await flutter_libtransmission.requestAsync(jsonEncode(request));
+  }
+}
+
+class TransmissionSession extends Session {
+  TransmissionSession(
+      {super.downloadDir,
+      super.downloadQueueEnabled,
+      super.downloadQueueSize,
+      super.peerPort,
+      super.speedLimitDownEnabled,
+      super.speedLimitUpEnabled,
+      super.speedLimitDown,
+      super.speedLimitUp});
+
+  @override
+  Future<void> update(SessionBase session) async {
+    SessionSetRequest request = SessionSetRequest(
+        arguments: SessionSetRequestArguments(
+            downloadDir: session.downloadDir,
+            downloadQueueSize: session.downloadQueueSize,
+            peerPort: session.peerPort,
+            speedLimitDownEnabled: session.speedLimitDownEnabled,
+            speedLimitUpEnabled: session.speedLimitUpEnabled,
+            speedLimitDown: session.speedLimitDown,
+            speedLimitUp: session.speedLimitUp));
+
+    await flutter_libtransmission.requestAsync(jsonEncode(request));
+    flutter_libtransmission.saveSettings();
+  }
+}
+
+class TransmissionEngine extends Engine {
+  @override
+  init() async {
+    final configDir = await getConfigDir();
+    flutter_libtransmission.initSession(configDir.path);
+    if (Platform.isAndroid) {
+      await android.initDefaultDownloadDir(this);
+    }
+
+    if (Platform.isIOS) {
+      await ios.initDefaultDownloadDir(this);
+      // Once done, restart session to reload torrents in error state
+      await dispose();
+      flutter_libtransmission.initSession(configDir.path);
+    }
+  }
+
+  @override
+  Future dispose() {
+    return Isolate.run(() => flutter_libtransmission.closeSession());
+  }
+
+  @override
+  Future<TorrentAddedResponse> addTorrent(
+      String? filename, String? metainfo, String? downloadDir) async {
+    var torrentAddRequest = TorrentAddRequest(
+        arguments: TorrentAddRequestArguments(
+            filename: filename, metainfo: metainfo, downloadDir: downloadDir));
+    var jsonResponse = await flutter_libtransmission
+        .requestAsync(jsonEncode(torrentAddRequest));
+    TorrentAddResponse response =
+        TorrentAddResponse.fromJson(jsonDecode(jsonResponse));
+
+    if (response.result != 'success') {
+      // On failure the result is the error itself, e.g.
+      // "Couldn't fetch torrent: Timeout was reached (28)".
+      throw TorrentAddError(response.result);
+    }
+
+    if (response.arguments!.torrentDuplicate) {
+      return TorrentAddedResponse.duplicated;
+    }
+
+    return TorrentAddedResponse.added;
+  }
+
+  @override
+  Future<List<Torrent>> fetchTorrents() async {
+    String res = await flutter_libtransmission.requestAsync(jsonEncode(
+        TorrentGetRequest(
+            arguments: TorrentGetRequestArguments(fields: torrentListFields))));
+
+    final TorrentGetResponse decodedRes =
+        TorrentGetResponse.fromJson(jsonDecode(res));
+
+    return decodedRes.arguments.torrents
+        .map((torrent) => createTransmissionTorrentFromJson(torrent))
+        .toList();
+  }
+
+  @override
+  Future<Torrent> fetchTorrent(int id) async {
+    String res = await flutter_libtransmission.requestAsync(jsonEncode(
+        TorrentGetRequest(
+            arguments: TorrentGetRequestArguments(
+                ids: [id], fields: torrentGetFields))));
+
+    final TorrentGetResponse decodedRes =
+        TorrentGetResponse.fromJson(jsonDecode(res));
+
+    return createTransmissionTorrentFromJson(
+        decodedRes.arguments.torrents.first);
+  }
+
+  @override
+  Future<Session> fetchSession() async {
+    SessionGetRequest sessionGetRequest = SessionGetRequest(
+        arguments: SessionGetRequestArguments(fields: [
+      SessionField.downloadDir,
+      SessionField.downloadQueueEnabled,
+      SessionField.downloadQueueSize,
+      SessionField.peerPort,
+      SessionField.speedLimitDownEnabled,
+      SessionField.speedLimitUpEnabled,
+      SessionField.speedLimitDown,
+      SessionField.speedLimitUp
+    ]));
+    String res = await flutter_libtransmission
+        .requestAsync(jsonEncode(sessionGetRequest));
+
+    final SessionGetResponse decodedRes =
+        SessionGetResponse.fromJson(jsonDecode(res));
+
+    return TransmissionSession(
+        downloadDir: decodedRes.arguments.downloadDir,
+        downloadQueueEnabled: decodedRes.arguments.downloadQueueEnabled,
+        downloadQueueSize: decodedRes.arguments.downloadQueueSize,
+        peerPort: decodedRes.arguments.peerPort,
+        speedLimitDownEnabled: decodedRes.arguments.speedLimitDownEnabled,
+        speedLimitUpEnabled: decodedRes.arguments.speedLimitUpEnabled,
+        speedLimitDown: decodedRes.arguments.speedLimitDown,
+        speedLimitUp: decodedRes.arguments.speedLimitUp);
+  }
+
+  @override
+  Future resetSettings() async {
+    flutter_libtransmission.resetSettings();
+    if (Platform.isAndroid) {
+      await android.initDefaultDownloadDir(this);
+    }
+    if (Platform.isIOS) {
+      await ios.initDefaultDownloadDir(this);
+    }
+  }
+
+  @override
+  Future setTorrentsLocation(
+      TorrentSetLocationArguments torrentSetLocationArguments) async {
+    final request =
+        TorrentSetLocationRequest(arguments: torrentSetLocationArguments);
+    await flutter_libtransmission.requestAsync(jsonEncode(request));
+  }
+
+  @override
+  Future removeTorrents(List<int> torrentIds, bool withData) async {
+    var request = TorrentRemoveRequest(
+        arguments: TorrentRemoveRequestArguments(
+            ids: torrentIds, deleteLocalData: withData));
+    await flutter_libtransmission.requestAsync(jsonEncode(request));
+  }
+}

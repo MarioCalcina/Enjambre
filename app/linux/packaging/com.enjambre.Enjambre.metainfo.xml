@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<component type="desktop-application">
+  <id>com.enjambre.Enjambre</id>
+  <name>Enjambre</name>
+  <summary>Download torrents and watch videos while they download</summary>
+
+
+  <metadata_license>CC-BY-SA-4.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+
+  <content_rating type="oars-1.0" />
+
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+    <control>touch</control>
+  </supports>
+
+  <description>
+    <p>Enjambre is a torrent client with a built-in player: watch videos while they download.</p>
+
+    <ul>
+      <li>Play video and audio files while they download, with subtitles and audio track selection</li>
+      <li>Pick which files of a torrent to download</li>
+      <li>Organize torrents with labels, search, sort and filter them</li>
+      <li>Share torrents as magnet links</li>
+      <li>Speed limits and a limit on active downloads</li>
+      <li>Keeps downloading in the background, and notifies when a download completes</li>
+      <li>Available on Windows, Linux, macOS, Android and iOS</li>
+      <li>Built on Transmission for low CPU and memory usage</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">com.enjambre.Enjambre.desktop</launchable>
+  <releases>
+    <!-- One entry per release, newest first, see docs/release.md -->
+  </releases>
+</component>

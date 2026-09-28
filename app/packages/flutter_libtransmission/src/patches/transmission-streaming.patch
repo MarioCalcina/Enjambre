@@ -1,0 +1,180 @@
+diff --git a/libtransmission/peer-mgr-wishlist.cc b/libtransmission/peer-mgr-wishlist.cc
+index 5f9cc048dcf..a08371ea13c 100644
+--- a/libtransmission/peer-mgr-wishlist.cc
++++ b/libtransmission/peer-mgr-wishlist.cc
+@@ -56,6 +56,7 @@ Wishlist::Candidate::Candidate(tr_piece_index_t piece_in, tr_piece_index_t salt_
+     , replication{ mediator->count_piece_replication(piece_in) }
+     , priority{ mediator->priority(piece_in) }
+     , salt{ salt_in }
++    , is_sequential{ mediator->is_sequential_download() }
+ {
+     unrequested.reserve(block_span.end - block_span.begin);
+     for (auto [begin, i] = block_span; i > begin; --i)
+@@ -71,16 +72,27 @@ Wishlist::Candidate::Candidate(tr_piece_index_t piece_in, tr_piece_index_t salt_
+ 
+ std::vector<tr_block_span_t> Wishlist::next(
+     size_t const n_wanted_blocks,
+-    std::function<bool(tr_piece_index_t)> const& peer_has_piece)
++    std::function<bool(tr_piece_index_t)> const& peer_has_piece,
++    bool is_slow_peer)
+ {
+     if (n_wanted_blocks == 0U)
+     {
+         return {};
+     }
+ 
++    // for slow peers in sequential mode, reverse the candidates to
++    // assign least priority pieces from the end
++    auto candidates_reversed = CandidateVec{};
++    if (mediator_.is_sequential_download() && is_slow_peer)
++    {
++        candidates_reversed = candidates_;
++        std::ranges::reverse(candidates_reversed);
++    }
++    auto const& candidates = mediator_.is_sequential_download() && is_slow_peer ? candidates_reversed : candidates_;
++
+     auto blocks = small::vector<tr_block_index_t>{};
+     blocks.reserve(n_wanted_blocks);
+-    for (auto const& candidate : candidates_)
++    for (auto const& candidate : candidates)
+     {
+         auto const n_added = std::size(blocks);
+         TR_ASSERT(n_added <= n_wanted_blocks);
+diff --git a/libtransmission/peer-mgr-wishlist.h b/libtransmission/peer-mgr-wishlist.h
+index 41da507aca4..731567851a7 100644
+--- a/libtransmission/peer-mgr-wishlist.h
++++ b/libtransmission/peer-mgr-wishlist.h
+@@ -50,10 +50,14 @@ class Wishlist
+ 
+         [[nodiscard]] constexpr auto operator<=>(Candidate const& that) const noexcept
+         {
+-            // prefer pieces closer to completion
+-            if (auto const val = std::size(unrequested) <=> std::size(that.unrequested); val != 0)
++            // prefer pieces closer to completion. Skipped in sequential mode to allow slow peers
++            // request lower priority pieces while fast peers request blocks in order.
++            if (!is_sequential)
+             {
+-                return val;
++                if (auto const val = std::size(unrequested) <=> std::size(that.unrequested); val != 0)
++                {
++                    return val;
++                }
+             }
+ 
+             // prefer higher priority
+@@ -99,6 +103,7 @@ class Wishlist
+         tr_priority_t priority;
+ 
+         tr_piece_index_t salt;
++        bool is_sequential;
+     };
+ 
+     using CandidateVec = std::vector<Candidate>;
+@@ -191,7 +196,8 @@ class Wishlist
+     // the next blocks that we should request from a peer
+     [[nodiscard]] std::vector<tr_block_span_t> next(
+         size_t n_wanted_blocks,
+-        std::function<bool(tr_piece_index_t)> const& peer_has_piece);
++        std::function<bool(tr_piece_index_t)> const& peer_has_piece,
++        bool is_slow_peer = false);
+ 
+ private:
+     constexpr void dec_replication() noexcept
+diff --git a/libtransmission/peer-mgr.cc b/libtransmission/peer-mgr.cc
+index d8c62d3cd86..2570c879397 100644
+--- a/libtransmission/peer-mgr.cc
++++ b/libtransmission/peer-mgr.cc
+@@ -408,9 +408,12 @@ class tr_swarm
+         {
+         }
+ 
+-        [[nodiscard]] auto next(size_t const n_wanted_blocks, std::function<bool(tr_piece_index_t)> const& peer_has_piece)
++        [[nodiscard]] auto next(
++            size_t const n_wanted_blocks,
++            std::function<bool(tr_piece_index_t)> const& peer_has_piece,
++            bool is_slow_peer = false)
+         {
+-            return wishlist_.next(n_wanted_blocks, peer_has_piece);
++            return wishlist_.next(n_wanted_blocks, peer_has_piece, is_slow_peer);
+         }
+ 
+         [[nodiscard]] bool client_has_block(tr_block_index_t const block) const override
+@@ -1218,7 +1221,16 @@ std::vector<tr_block_span_t> tr_peerMgrGetNextRequests(tr_torrent* torrent, tr_p
+ 
+     if (auto& controller = torrent->swarm->wishlist_controller)
+     {
+-        return controller->next(numwant, [peer](tr_piece_index_t p) { return peer->has_piece(p); });
++        // check if peer is slow (< 1 block/s) in sequential mode.
++        // slow peer will request blocks from the end (not urgent for streaming)
++        bool is_slow_peer = false;
++        if (torrent->is_sequential_download())
++        {
++            auto const peer_speed = peer->get_piece_speed(tr_time_msec(), tr_direction::PeerToClient);
++            is_slow_peer = peer_speed < tr::Values::Speed{ tr_block_info::BlockSize, tr::Values::Speed::Units::Byps };
++        }
++
++        return controller->next(numwant, [peer](tr_piece_index_t p) { return peer->has_piece(p); }, is_slow_peer);
+     }
+ 
+     return {};
+diff --git a/libtransmission/peer-msgs.cc b/libtransmission/peer-msgs.cc
+index 9999532a206..4894de49876 100644
+--- a/libtransmission/peer-msgs.cc
++++ b/libtransmission/peer-msgs.cc
+@@ -184,6 +184,8 @@ auto constexpr PeerReqQDefault = 500U;
+ // batch them together to send enough requests to
+ // meet our bandwidth goals for the next N seconds
+ auto constexpr RequestBufSecs = time_t{ 10 };
++// in sequential mode, target a 1s window to match lower request timeout
++auto constexpr RequestBufSecsSequential = time_t{ 1 };
+ 
+ // ---
+ 
+@@ -468,8 +470,7 @@ class tr_peerMsgsImpl final
+         TR_ASSERT(tor_.client_can_download());
+         TR_ASSERT(client_is_interested());
+         TR_ASSERT(!client_is_choked());
+-
+-        auto const timeout = tr_time() + RequestTimeoutSecs;
++        auto const timeout = tr_time() + (tor_.is_sequential_download() ? RequestTimeoutSecsSequential : RequestTimeoutSecs);
+         for (auto const *span = block_spans, *span_end = span + n_spans; span != span_end; ++span)
+         {
+             auto const [block_begin, block_end] = *span;
+@@ -751,6 +752,7 @@ class tr_peerMsgsImpl final
+ 
+     // how many seconds we expect the next piece block to arrive
+     static auto constexpr RequestTimeoutSecs = time_t{ 25 };
++    static auto constexpr RequestTimeoutSecsSequential = time_t{ 3 };
+ };
+ 
+ // ---
+@@ -1955,6 +1957,7 @@ void tr_peerMsgsImpl::check_request_timeout(time_t const now)
+ 
+         if (now >= timeout)
+         {
++            logdbg(this, fmt::format("check_request_timeout cancelling block {}", block));
+             // request timed out, discard
+             cancel_block_request(block);
+             it = request_timeouts_.erase(it);
+@@ -2164,13 +2167,16 @@ size_t tr_peerMsgsImpl::max_available_reqs() const
+ 
+     // use this desired rate to figure out how
+     // many requests we should send to this peer
+-    static auto constexpr Floor = size_t{ 32 };
+-    static size_t constexpr Seconds = RequestBufSecs;
+-    size_t const estimated_blocks_in_period = (rate.base_quantity() * Seconds) / tr_block_info::BlockSize;
++    auto const is_sequential = tor_.is_sequential_download();
++    // In sequential mode, peers should target a 1s
++    // window of blocks requests to avoid low timeout value
++    size_t const floor = is_sequential ? size_t{ 1 } : size_t{ 32 };
++    size_t const seconds = is_sequential ? RequestBufSecsSequential : RequestBufSecs;
++    size_t const estimated_blocks_in_period = (rate.base_quantity() * seconds) / tr_block_info::BlockSize;
+     auto const ceil = peer_reqq_.value_or(PeerReqQDefault);
+ 
+-    // Don't use std::clamp as `ceil` can be smaller than `Floor`
+-    return std::max(Floor, std::min(estimated_blocks_in_period, ceil));
++    // Don't use std::clamp as `ceil` can be smaller than `floor`
++    return std::max(floor, std::min(estimated_blocks_in_period, ceil));
+ }
+ 
+ } // namespace

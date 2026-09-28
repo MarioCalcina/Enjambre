@@ -1,0 +1,72 @@
+import 'package:flutter/material.dart';
+import 'package:enjambre/l10n/app_localizations.dart';
+import 'package:enjambre/models/torrents.dart';
+import 'package:provider/provider.dart';
+
+class FiltersDialog extends StatefulWidget {
+  const FiltersDialog({super.key});
+
+  @override
+  State<FiltersDialog> createState() => _FiltersDialogState();
+}
+
+class _FiltersDialogState extends State<FiltersDialog> {
+  Filters filters = Filters(labels: {});
+
+  @override
+  void initState() {
+    super.initState();
+    var torrentsModel = Provider.of<TorrentsModel>(context, listen: false);
+    // Handle a copy of  filters until we apply filters
+    filters = Filters.copy(torrentsModel.filters);
+  }
+
+  _handleApply(context) {
+    Provider.of<TorrentsModel>(context, listen: false).setFilters(filters);
+    Navigator.of(context).pop();
+  }
+
+  handleFilterChipSelected(bool selected, String label) {
+    selected ? filters.addLabel(label) : filters.removeLabel(label);
+
+    setState(() {
+      filters = filters;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final localizations = AppLocalizations.of(context)!;
+
+    return Consumer<TorrentsModel>(builder: (context, torrentsModel, child) {
+      return AlertDialog(
+        title: Text(localizations.filters),
+        content: torrentsModel.labels.isEmpty
+            ? Text(localizations.noTagsAddedYet)
+            : Wrap(
+                spacing: 8.0, // gap between adjacent chips
+                runSpacing: 4.0,
+                children: [
+                    ...torrentsModel.labels.map((String label) => FilterChip(
+                          label: Text(label),
+                          selected: filters.labels.contains(label),
+                          onSelected: (bool selected) =>
+                              handleFilterChipSelected(selected, label),
+                        ))
+                  ]),
+        actions: <Widget>[
+          TextButton(
+            child: Text(localizations.cancel),
+            onPressed: () {
+              Navigator.of(context).pop();
+            },
+          ),
+          TextButton(
+            child: Text(localizations.apply),
+            onPressed: () => _handleApply(context),
+          ),
+        ],
+      );
+    });
+  }
+}

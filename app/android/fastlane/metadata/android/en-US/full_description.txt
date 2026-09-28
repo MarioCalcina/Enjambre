@@ -1,0 +1,13 @@
+Enjambre is a torrent client with a built-in player: watch videos while they download.
+
+Features:
+- Play video and audio files while they download, with subtitles and audio track selection
+- Pick which files of a torrent to download
+- Organize torrents with labels, search, sort and filter them
+- Share torrents as magnet links
+- Speed limits and a limit on active downloads
+- Keeps downloading in the background, and notifies when a download completes
+- Light and dark themes
+- Built on Transmission for low CPU and memory usage
+- Also available on Windows, Linux and macOS
+- Open source software

@@ -1,0 +1,163 @@
+import 'dart:convert';
+
+import 'package:enjambre/engine/torrent.dart';
+import 'package:enjambre/utils/bitfield.dart';
+
+enum TorrentField {
+  id,
+  name,
+  status,
+  percentDone,
+  totalSize,
+  rateDownload,
+  rateUpload,
+  downloadedEver,
+  uploadedEver,
+  eta,
+  pieceCount,
+  pieces,
+  pieceSize,
+  error,
+  errorString,
+  addedDate,
+  downloadDir,
+  isPrivate,
+  creator,
+  comment,
+  files,
+  fileStats,
+  labels,
+  peersConnected,
+  magnetLink,
+  sequentialDownload,
+  doneDate
+}
+
+class TransmissionTorrentFile {
+  final String name;
+  final int length;
+  final int bytesCompleted;
+  final int beginPiece;
+  final int endPiece;
+
+  TransmissionTorrentFile(this.name, this.length, this.bytesCompleted,
+      this.beginPiece, this.endPiece);
+
+  TransmissionTorrentFile.fromJson(Map<String, dynamic> json)
+      : name = json['name'],
+        length = json['length'],
+        bytesCompleted = json['bytesCompleted'],
+        beginPiece = json['begin_piece'],
+        endPiece = json['end_piece'];
+}
+
+class TransmissionTorrentFileStats {
+  final bool wanted;
+
+  TransmissionTorrentFileStats(this.wanted);
+
+  TransmissionTorrentFileStats.fromJson(Map<String, dynamic> json)
+      : wanted = json['wanted'];
+}
+
+class TransmissionTorrentModel {
+  final int id;
+  final String name;
+  final double percentDone;
+  final TorrentStatus status;
+  final int totalSize;
+  final int rateDownload;
+  final int rateUpload;
+  final int downloadedEver;
+  final int uploadedEver;
+  final int eta;
+  final int pieceCount;
+  final List<bool> pieces;
+  final int pieceSize;
+  final String errorString;
+  final int error;
+  final String location;
+  final bool isPrivate;
+  final int addedDate;
+  final String creator;
+  final String comment;
+  final List<TransmissionTorrentFile> files;
+  final List<TransmissionTorrentFileStats> fileStats;
+  final List<String> labels;
+  final int peersConnected;
+  final String magnetLink;
+  final bool sequentialDownload;
+  final DateTime doneDate;
+
+  const TransmissionTorrentModel(
+      this.id,
+      this.name,
+      this.percentDone,
+      this.status,
+      this.totalSize,
+      this.rateDownload,
+      this.rateUpload,
+      this.downloadedEver,
+      this.uploadedEver,
+      this.eta, // in seconds
+      this.errorString,
+      this.error,
+      this.pieces,
+      this.pieceSize,
+      this.pieceCount,
+      this.addedDate,
+      this.isPrivate,
+      this.location,
+      this.comment,
+      this.creator,
+      this.files,
+      this.labels,
+      this.peersConnected,
+      this.fileStats,
+      this.magnetLink,
+      this.sequentialDownload,
+      this.doneDate);
+
+  TransmissionTorrentModel.fromJson(Map<String, dynamic> json)
+      : id = json['id'],
+        name = json['name'],
+        percentDone = json['percentDone'] is int
+            ? json['percentDone'].toDouble()
+            : json['percentDone'],
+        status = TorrentStatus.values[json['status']],
+        totalSize = json['totalSize'],
+        rateDownload = json['rateDownload'],
+        rateUpload = json['rateUpload'],
+        downloadedEver = json['downloadedEver'],
+        uploadedEver = json['uploadedEver'],
+        eta = json['eta'],
+        // The bitfield is only requested for a single torrent, not for the
+        // whole list.
+        pieces = json['pieces'] == null
+            ? const []
+            : convertBitfieldToBoolList(
+                base64Decode(json['pieces']), json['pieceCount']),
+        pieceCount = json['pieceCount'],
+        pieceSize = json['pieceSize'],
+        errorString = json['errorString'],
+        // 0 ok, 1 tracker warning, 2 tracker error, 3 local error
+        error = json['error'] ?? 0,
+        location = json['downloadDir'],
+        isPrivate = json['isPrivate'],
+        addedDate = json['addedDate'],
+        creator = json['creator'],
+        comment = json['comment'],
+        files = json['files']
+            ?.map<TransmissionTorrentFile>(
+                (json) => TransmissionTorrentFile.fromJson(json))
+            .toList(),
+        fileStats = json['fileStats']
+            ?.map<TransmissionTorrentFileStats>(
+                (json) => TransmissionTorrentFileStats.fromJson(json))
+            .toList(),
+        labels = List<String>.from(json['labels']),
+        peersConnected = json['peersConnected'],
+        magnetLink = json['magnetLink'],
+        sequentialDownload = json['sequential_download'] as bool,
+        doneDate = DateTime.fromMillisecondsSinceEpoch(json['doneDate'] * 1000);
+}
