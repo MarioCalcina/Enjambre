@@ -118,6 +118,9 @@ jobs:
           path: ${{ github.workspace }}/artifacts
 
   macos:
+    # Needs the Apple signing secrets: enable with the BUILD_MACOS repository
+    # variable set to true once they are configured.
+    if: vars.BUILD_MACOS == 'true'
     runs-on: macos-15
     env:
       # Should be same as defined in /app/macos/Runner.xcodeproj
@@ -192,6 +195,9 @@ jobs:
           path: ~/artifacts/
 
   android:
+    # Needs the Android signing secrets: enable with the BUILD_ANDROID
+    # repository variable set to true once they are configured.
+    if: vars.BUILD_ANDROID == 'true'
     runs-on: ubuntu-24.04
     env:
       VCPKG_MANIFEST_DIR: ${{ github.workspace }}/app
@@ -248,6 +254,9 @@ jobs:
           path: ~/artifacts/
 
   ios:
+    # Needs the Apple signing secrets: enable with the BUILD_IOS repository
+    # variable set to true once they are configured.
+    if: vars.BUILD_IOS == 'true'
     runs-on: macos-15
     env:
       # Do not target simulator
@@ -293,7 +302,9 @@ jobs:
           path: ~/artifacts/
 
   release:
-    if: startsWith(github.ref, 'refs/tags/')
+    # Also runs when the disabled platforms were skipped, but not when a job
+    # failed.
+    if: startsWith(github.ref, 'refs/tags/') && !failure() && !cancelled()
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -306,17 +317,22 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v4
 
-      - name: Desktop
+      - name: Linux & Windows
         run: |
           mv enjambre-linux/release.zip Enjambre-${{ github.ref_name }}-linux-x64.zip
           mv enjambre-linux-arm64/release.zip Enjambre-${{ github.ref_name }}-linux-arm64.zip
           mv enjambre-windows/release.zip Enjambre-${{ github.ref_name }}-windows-x64.zip
+      - name: macOS
+        if: needs.macos.result == 'success'
+        run: |
           mv enjambre-macos/release.app.zip ${{ github.workspace }}/Enjambre-${{ github.ref_name }}-macos.app.zip
           mv enjambre-macos/*.dmg ${{ github.workspace }}/Enjambre-${{ github.ref_name }}-macos.dmg
-      - name: Mobile
-        run: |
-          mv enjambre-android/*.apk Enjambre-${{ github.ref_name }}-android.apk
-          mv enjambre-ios/*.ipa Enjambre-${{ github.ref_name }}-ios.ipa
+      - name: Android
+        if: needs.android.result == 'success'
+        run: mv enjambre-android/*.apk Enjambre-${{ github.ref_name }}-android.apk
+      - name: iOS
+        if: needs.ios.result == 'success'
+        run: mv enjambre-ios/*.ipa Enjambre-${{ github.ref_name }}-ios.ipa
 
       # Reuse the Play Store changelog, which supply keys by versionCode
       - name: Resolve release notes

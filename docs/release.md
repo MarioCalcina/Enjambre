@@ -12,8 +12,12 @@
 1. Create commit & tag with format `vx.y.z`.
 1. `git push && git push origin tag vx.y.z`
 
-CI then builds every platform and publishes the GitHub release with the changelog as
-its body.
+CI then builds every enabled platform and publishes the GitHub release with the
+changelog as its body.
+
+Linux and Windows always build. macOS, iOS and Android need signing secrets, so their
+jobs are skipped until the `BUILD_MACOS`, `BUILD_IOS` and `BUILD_ANDROID` repository
+variables are set to `true` (Settings → Secrets and variables → Actions → Variables).
 
 When the `GCP_WORKLOAD_IDENTITY_PROVIDER` and `GCP_SERVICE_ACCOUNT` repository
 variables are set, CI also uploads the bundle to the Play Store production track along
